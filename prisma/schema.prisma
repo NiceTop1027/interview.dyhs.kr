@@ -1,0 +1,385 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = "postgresql://postgres:postgres@127.0.0.1:25432/nicetop_ai?schema=public&sslmode=disable"
+}
+
+// ==================== 사용자 관련 ====================
+
+enum UserRole {
+  ADMIN       // 관리자
+  EXAMINER    // 면접관/감독관
+  CANDIDATE   // 응시자
+}
+
+model User {
+  id            String    @id @default(uuid())
+  email         String?   @unique
+  name          String
+  password      String?   // 관리자/면접관용
+  role          UserRole  @default(CANDIDATE)
+  profileImage  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // 관계
+  createdExams      Exam[]           @relation("ExamCreator")
+  examSessions      ExamSession[]
+  createdQuestions  Question[]
+  supervisionNotes  SupervisionNote[]
+  inviteCodes       InviteCode[]     @relation("InviteCodeCreator")
+
+  @@map("users")
+}
+
+model InviteCode {
+  id          String    @id @default(uuid())
+  code        String    @unique
+  examId      String
+  maxUses     Int       @default(1)
+  usedCount   Int       @default(0)
+  expiresAt   DateTime
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  createdById String
+  candidateName String?
+
+  // 관계
+  exam        Exam      @relation(fields: [examId], references: [id], onDelete: Cascade)
+  createdBy   User      @relation("InviteCodeCreator", fields: [createdById], references: [id])
+  usages      InviteCodeUsage[]
+
+  @@map("invite_codes")
+}
+
+model InviteCodeUsage {
+  id           String   @id @default(uuid())
+  inviteCodeId String
+  candidateName String
+  usedAt       DateTime @default(now())
+
+  // 관계
+  inviteCode   InviteCode @relation(fields: [inviteCodeId], references: [id], onDelete: Cascade)
+
+  @@map("invite_code_usages")
+}
+
+// ==================== 시험/면접 관련 ====================
+
+enum ExamType {
+  INTERVIEW   // AI 면접
+  EXAM        // 온라인 시험
+  HYBRID      // 면접 + 시험 혼합
+}
+
+enum ExamStatus {
+  DRAFT       // 작성중
+  PUBLISHED   // 게시됨
+  IN_PROGRESS // 진행중
+  COMPLETED   // 완료
+  ARCHIVED    // 보관됨
+}
+
+model Exam {
+  id              String     @id @default(uuid())
+  title           String
+  description     String?
+  type            ExamType   @default(EXAM)
+  status          ExamStatus @default(DRAFT)
+
+  // 시험 설정
+  duration        Int        @default(60)    // 분 단위
+  startTime       DateTime?
+  endTime         DateTime?
+  entryStartTime  DateTime?  // 입장 가능 시작 시간
+  entryEndTime    DateTime?  // 입장 마감 시간
+
+  // AI 면접 설정
+  aiInterviewerName    String?   @default("AI 면접관")
+  aiInterviewerPrompt  String?   // AI 면접관 시스템 프롬프트
+  maxQuestions         Int?      @default(10)  // 최대 질문 수
+
+  // 보안 설정
+  enableCamera         Boolean   @default(true)
+  enableMicrophone     Boolean   @default(true)
+  enableScreenShare    Boolean   @default(false)
+  enableCheatingDetection Boolean @default(true)
+  randomizeQuestions   Boolean   @default(true)
+  randomizeOptions     Boolean   @default(true)
+  preventCopyPaste     Boolean   @default(true)
+
+  // 채점 설정
+  showResultImmediately Boolean  @default(false)
+  passingScore          Float?   // 합격 점수
+  
+  // 글로벌 동기화 설정
+  isGlobalSync         Boolean   @default(false)
+  currentQuestionIndex Int       @default(0)
+  currentQuestionStartTime DateTime?
+
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  createdById     String
+
+  // 관계
+  createdBy       User       @relation("ExamCreator", fields: [createdById], references: [id])
+  questions       ExamQuestion[]
+  sessions        ExamSession[]
+  inviteCodes     InviteCode[]
+
+  @@map("exams")
+}
+
+// ==================== 문제은행 관련 ====================
+
+model QuestionBank {
+  id          String     @id @default(uuid())
+  name        String
+  description String?
+  category    String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  // 관계
+  questions   Question[]
+
+  @@map("question_banks")
+}
+
+enum QuestionType {
+  MULTIPLE_CHOICE  // 객관식
+  MULTIPLE_SELECT  // 다중 선택
+  SHORT_ANSWER     // 단답형
+  ESSAY            // 서술형
+  SPEAKING         // 스피킹 (음성 답변)
+  CODING           // 코딩 문제
+}
+
+model Question {
+  id              String       @id @default(uuid())
+  type            QuestionType @default(MULTIPLE_CHOICE)
+  content         String       // 문제 내용 (HTML 또는 Markdown)
+  explanation     String?      // 해설
+  points          Float        @default(1)
+  timeLimit       Int?         // 초 단위 (개별 문제 제한시간)
+
+  // 객관식 옵션
+  options         Json?        // [{ id, content, isCorrect }]
+
+  // 주관식/서술형 정답
+  correctAnswer   String?
+  answerKeywords  String[]     // 채점용 키워드
+
+  // AI 채점 설정
+  useAiGrading    Boolean      @default(false)
+  gradingPrompt   String?      // AI 채점 프롬프트
+
+  // 메타데이터
+  difficulty      Int          @default(1) // 1-5 난이도
+  tags            String[]
+
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  createdById     String?
+  questionBankId  String?
+
+  // 관계
+  createdBy       User?        @relation(fields: [createdById], references: [id])
+  questionBank    QuestionBank? @relation(fields: [questionBankId], references: [id])
+  examQuestions   ExamQuestion[]
+  answers         Answer[]
+
+  @@map("questions")
+}
+
+model ExamQuestion {
+  id          String   @id @default(uuid())
+  examId      String
+  questionId  String
+  order       Int      @default(0)
+
+  // 관계
+  exam        Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  question    Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([examId, questionId])
+  @@map("exam_questions")
+}
+
+// ==================== 응시 세션 관련 ====================
+
+enum SessionStatus {
+  WAITING     // 대기중
+  IN_PROGRESS // 진행중
+  PAUSED      // 일시정지
+  SUBMITTED   // 제출완료
+  GRADED      // 채점완료
+  INVALIDATED // 무효처리
+}
+
+model ExamSession {
+  id            String        @id @default(uuid())
+  examId        String
+  userId        String
+  status        SessionStatus @default(WAITING)
+
+  // 시간 정보
+  startedAt     DateTime?
+  submittedAt   DateTime?
+  timeSpent     Int           @default(0) // 초 단위
+
+  // 점수
+  totalScore    Float?
+  maxScore      Float?
+  percentage    Float?
+  isPassed      Boolean?
+
+  // AI 면접 관련
+  aiConversation Json?        // AI와의 대화 기록
+  aiEvaluation   Json?        // AI 평가 결과
+  aiBehavioralReport Json?    // AI 행동 분석 결과
+  aiVideoAnalysis Json?       // AI 비디오 분석 상세 데이터
+  recordingUrl   String?      // 녹화된 영상 URL
+
+  // 부정행위 관련
+  cheatingScore Float         @default(0) // 0-100
+  cheatingFlags String[]      // 감지된 부정행위 플래그
+
+  // 메타데이터
+  ipAddress     String?
+  userAgent     String?
+
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  // 관계
+  exam          Exam          @relation(fields: [examId], references: [id], onDelete: Cascade)
+  user          User          @relation(fields: [userId], references: [id])
+  answers       Answer[]
+  recordings    Recording[]
+  cheatingLogs  CheatingLog[]
+  supervisionNotes SupervisionNote[]
+
+  @@unique([examId, userId])
+  @@map("exam_sessions")
+}
+
+model Answer {
+  id            String   @id @default(uuid())
+  sessionId     String
+  questionId    String
+
+  // 답변 내용
+  content       String?  // 텍스트 답변
+  selectedOptions String[] // 선택한 옵션 ID들
+  audioUrl      String?  // 음성 답변 URL
+
+  // 채점
+  score         Float?
+  maxScore      Float?
+  feedback      String?  // 채점 피드백
+  isCorrect     Boolean?
+
+  // AI 채점 결과
+  aiScore       Float?
+  aiFeedback    String?
+
+  answeredAt    DateTime @default(now())
+  timeSpent     Int      @default(0) // 초 단위
+
+  // 관계
+  session       ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  question      Question    @relation(fields: [questionId], references: [id])
+
+  @@unique([sessionId, questionId])
+  @@map("answers")
+}
+
+// ==================== 녹화/부정행위 관련 ====================
+
+enum RecordingType {
+  CAMERA      // 정면 카메라
+  SCREEN      // 화면 녹화
+  AUDIO       // 음성
+  ENVIRONMENT // 주변 환경
+}
+
+model Recording {
+  id          String        @id @default(uuid())
+  sessionId   String
+  type        RecordingType @default(CAMERA)
+  url         String
+  duration    Int           @default(0) // 초 단위
+  fileSize    Int           @default(0) // bytes
+  startTime   DateTime
+  endTime     DateTime?
+
+  createdAt   DateTime      @default(now())
+
+  // 관계
+  session     ExamSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("recordings")
+}
+
+enum CheatingType {
+  FACE_NOT_DETECTED     // 얼굴 미감지
+  MULTIPLE_FACES        // 다중 인원
+  GAZE_AWAY            // 시선 이탈
+  LEFT_SEAT            // 자리 비움
+  VOICE_DETECTED       // 대화 감지
+  TAB_SWITCH           // 탭 전환
+  WINDOW_BLUR          // 창 포커스 이탈
+  COPY_PASTE           // 복사/붙여넣기 시도
+  SCREENSHOT           // 스크린샷 시도
+  MULTIPLE_MONITORS    // 다중 모니터 감지
+  BROWSER_DEVTOOLS     // 개발자 도구
+  PHONE_DETECTED       // 휴대폰 감지
+  SUSPICIOUS_BEHAVIOR  // 기타 의심 행동
+}
+
+model CheatingLog {
+  id          String       @id @default(uuid())
+  sessionId   String
+  type        CheatingType
+  confidence  Float        @default(0) // 0-1 신뢰도
+  description String?
+  imageUrl    String?      // 스크린샷
+  timestamp   DateTime     @default(now())
+
+  // 관계
+  session     ExamSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("cheating_logs")
+}
+
+model SupervisionNote {
+  id          String      @id @default(uuid())
+  sessionId   String
+  supervisorId String
+  content     String
+  timestamp   DateTime    @default(now())
+
+  // 관계
+  session     ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  supervisor  User        @relation(fields: [supervisorId], references: [id])
+
+  @@map("supervision_notes")
+}
+
+// ==================== 시스템 설정 ====================
+
+model SystemSetting {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     Json
+  updatedAt DateTime @updatedAt
+
+  @@map("system_settings")
+}
